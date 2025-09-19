@@ -46,6 +46,15 @@ android {
     }
 }
 
+chaquopy {
+    defaultConfig {
+        version = "3.9"
+        pip {
+            install("pypdf==6.0.0")
+        }
+    }
+}
+
 dependencies {
 
     implementation(libs.androidx.core.ktx)
