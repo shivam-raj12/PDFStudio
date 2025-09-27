@@ -1,83 +1,98 @@
-from pypdf import PdfWriter, PdfReader
-import os
-import traceback
+# File: app/src/main/python/pdf_processor.py
 
-def merge_reorder_pdfs_to_temporary_file(output_temp_pdf_path, ordered_page_sources_with_paths):
+import pypdf
+import os
+import java # This import is crucial for isinstance and other Java interop
+
+def merge_reorder_pdfs_to_temporary_file(output_temp_pdf_path, ordered_page_sources_from_kotlin):
     """
-    Merges and reorders PDF pages based on the provided list and saves to a temporary path.
+    Merges and reorders pages from specified PDF files into a new temporary PDF.
 
     Args:
-        output_temp_pdf_path (str): The absolute path where the merged temporary PDF should be saved.
-        ordered_page_sources_with_paths (list): A list of dictionaries, where each dictionary
-            represents a page to be included in the output.
-            Expected format: [{'file_path': '/path/to/temp_pdf1.pdf', 'original_page_index': 0}, ...]
-                               file_path is the path to the temporary copy of the source PDF.
-
+        output_temp_pdf_path (str): The absolute path to save the merged temporary PDF.
+        ordered_page_sources_from_kotlin (java.util.List or list):
+            A list of dictionaries, where each dictionary contains:
+            'filePath': Path to the original PDF file.
+            'pageIndex': The 0-based index of the page in the original PDF.
+            'rotation': (Optional) Degrees to rotate the page (e.g., 90, 180, 270).
+                        Defaults to 0 if not provided.
     Returns:
-        tuple: (bool, str or None) -> (success_status, message_or_output_path)
-               If successful, (True, output_temp_pdf_path).
-               If failed, (False, error_message_string).
+        tuple: (bool, str) indicating (success, message_or_error_path)
+               If successful, message_or_error_path is the output_temp_pdf_path.
+               If failed, message_or_error_path is an error message.
     """
-    merger = PdfWriter()
-    print(f"Python: Starting merge_reorder_pdfs_to_temporary_file. Output to: {output_temp_pdf_path}")
-    print(f"Python: Received {len(ordered_page_sources_with_paths)} page sources.")
+    print(f"Python: merge_reorder_pdfs_to_temporary_file called. Output to: {output_temp_pdf_path}")
+    print(f"Python: Type of received page sources: {type(ordered_page_sources_from_kotlin)}")
 
-    if not ordered_page_sources_with_paths:
-        return False, "Python Error: No page sources provided."
+    # --- THIS IS THE KEY FIX ---
+    # Explicitly convert to a Python list if it's a Java List proxy
+    if isinstance(ordered_page_sources_from_kotlin, java.util.List):
+        print("Python: Detected java.util.List, converting to Python list.")
+        ordered_page_sources_with_paths = list(ordered_page_sources_from_kotlin)
+    else:
+        # Assuming it's already a Python list or a compatible iterable
+        ordered_page_sources_with_paths = ordered_page_sources_from_kotlin
+    # --- END OF KEY FIX ---
+
+    if not ordered_page_sources_with_paths: # Check if the list is empty after potential conversion
+        print("Python Error: No page sources provided (list is empty).")
+        return False, "Python Error: No page sources provided (list is empty)."
+
+    print(f"Python: Processing {len(ordered_page_sources_with_paths)} page sources after conversion.") # Now len() should work
+
+    merger = pypdf.PdfWriter() # Using PdfWriter for pypdf 4.x+ (PdfFileMerger is older)
 
     try:
         for i, page_source_info in enumerate(ordered_page_sources_with_paths):
-            pdf_file_path = page_source_info.get('file_path')
-            # Ensure original_page_index is treated as int, handle potential None or non-int
-            original_page_idx_raw = page_source_info.get('original_page_index')
+            file_path = page_source_info.get('filePath')
+            page_index = page_source_info.get('pageIndex')
+            # rotation = page_source_info.get('rotation', 0) # Example for rotation
 
-            if pdf_file_path is None or original_page_idx_raw is None:
-                return False, f"Python Error: Page source {i} is missing 'file_path' or 'original_page_index'."
+            if file_path is None or page_index is None:
+                error_msg = f"Python Error: Missing 'filePath' or 'pageIndex' in item {i}."
+                print(error_msg)
+                return False, error_msg
 
-            try:
-                original_page_idx = int(original_page_idx_raw)
-            except ValueError:
-                return False, f"Python Error: 'original_page_index' for page source {i} is not a valid integer."
-
-
-            print(f"Python: Processing source {i+1}: Path='{os.path.basename(pdf_file_path)}', Index={original_page_idx}")
-
-            if not os.path.exists(pdf_file_path):
-                return False, f"Python Error: Temporary input file not found: {pdf_file_path}"
-            if os.path.getsize(pdf_file_path) == 0:
-                return False, f"Python Error: Temporary input file is empty: {pdf_file_path}"
-
+            if not os.path.exists(file_path):
+                error_msg = f"Python Error: File not found at '{file_path}' for item {i}."
+                print(error_msg)
+                return False, error_msg
 
             try:
-                reader = PdfReader(pdf_file_path)
-                if 0 <= original_page_idx < len(reader.pages):
-                    merger.add_page(reader.pages[original_page_idx])
-                else:
-                    return False, f"Python Error: Page index {original_page_idx} out of bounds for {os.path.basename(pdf_file_path)} (0-{len(reader.pages)-1})."
-            except Exception as e_page:
-                # Log the specific PDF and page that caused the error
-                tb_str = traceback.format_exc()
-                return False, f"Python Error processing page {original_page_idx} from {os.path.basename(pdf_file_path)}: {str(e_page)}\nTrace: {tb_str}"
+                print(f"Python: Reading page {page_index} from {file_path}")
+                reader = pypdf.PdfReader(file_path)
+                if page_index >= len(reader.pages):
+                    error_msg = f"Python Error: pageIndex {page_index} out of bounds for file {file_path} which has {len(reader.pages)} pages."
+                    print(error_msg)
+                    return False, error_msg
 
-        if not merger.pages: # Check if any pages were actually added to the output
-            return False, "Python Error: No pages were successfully added to the output PDF. Input might be problematic."
+                # Add the specific page
+                merger.add_page(reader.pages[page_index])
 
-        # Write the merged PDF to the temporary output path
+                # Example: If you wanted to apply rotation (ensure your Kotlin side sends 'rotation' if needed)
+                # page_to_add = reader.pages[page_index]
+                # if rotation != 0:
+                #    page_to_add.rotate(rotation) # pypdf uses rotate() method
+                # merger.add_page(page_to_add)
+
+            except Exception as e:
+                error_msg = f"Python Error: Failed to process page {page_index} from '{file_path}'. Error: {e}"
+                print(error_msg)
+                return False, error_msg
+
         with open(output_temp_pdf_path, "wb") as f_out:
             merger.write(f_out)
-        merger.close()
-        print(f"Python: Successfully wrote merged PDF to {output_temp_pdf_path}")
+        merger.close() # Important to close the writer
 
-        # Check if the output file was actually created and is not empty
-        if os.path.exists(output_temp_pdf_path) and os.path.getsize(output_temp_pdf_path) > 0:
-            return True, output_temp_pdf_path # Return the path of the successfully created temp output file
-        else:
-            # This case should ideally not be hit if merger.write() was successful
-            # and no pages means the 'if not merger.pages' check above would trigger.
-            # But good to have as a safeguard.
-            return False, f"Python Error: Output file {output_temp_pdf_path} was not created or is empty after merging."
+        print(f"Python: Successfully merged PDF to {output_temp_pdf_path}")
+        return True, output_temp_pdf_path
 
-    except Exception as e_main:
-        # Catch any other unexpected errors during the process
-        tb_str = traceback.format_exc()
-        return False, f"Python: An unexpected error occurred: {str(e_main)}\nTrace: {tb_str}"
+    except Exception as e:
+        error_msg = f"Python Error: An unexpected error occurred during PDF merging. Error: {e}"
+        print(error_msg)
+        try:
+            merger.close() # Attempt to close even on error
+        except:
+            pass # Ignore errors during close on error
+        return False, error_msg
+
